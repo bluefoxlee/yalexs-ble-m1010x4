@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 from collections.abc import Callable, Iterable
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,6 +16,8 @@ from yalexs_ble.const import (
     AutoLockMode,
     AutoLockState,
     Commands,
+    LockActivityType,
+    LockActivityValue,
     LockInfo,
     LockOperationRemoteType,
     LockOperationSource,
@@ -145,7 +148,7 @@ def test_parse_lock_command_response_jammed() -> None:
     # Real lock-jam capture: byte[15] = 0x1F MECH_POSITION. byte[3] (0x1B
     # here) is only the frame checksum, not a status.
     frame = bytes.fromhex("bb0b001b00000000000000000000001f0000")
-    result = lock._parse_state(frame)
+    result = _parsed_state(lock, frame)
 
     assert result is not None
     assert list(result) == [LockStatus.JAMMED]
@@ -161,7 +164,7 @@ def test_parse_unlock_command_response_jammed() -> None:
     lock = _make_lock()
 
     frame = bytes.fromhex("bb0a001c00000000000000000000001f0000")
-    result = lock._parse_state(frame)
+    result = _parsed_state(lock, frame)
 
     assert result is not None
     assert list(result) == [LockStatus.JAMMED]
@@ -177,7 +180,7 @@ def test_parse_lock_command_response_success_is_no_update() -> None:
     lock = _make_lock()
 
     frame = bytes.fromhex("bb0b003a0000000000000000000000000000")
-    result = lock._parse_state(frame)
+    result = _parsed_state(lock, frame)
 
     assert result is not None
     assert list(result) == []
@@ -188,7 +191,7 @@ def test_parse_unlock_command_response_success_is_no_update() -> None:
     lock = _make_lock()
 
     frame = bytes.fromhex("bb0a003b0000000000000000000000000000")
-    result = lock._parse_state(frame)
+    result = _parsed_state(lock, frame)
 
     assert result is not None
     assert list(result) == []
@@ -200,7 +203,7 @@ def test_parse_getstatus_staticposition() -> None:
 
     # bb02 GETSTATUS, byte[4]=0x02 LOCK_ONLY, byte[8]=0x07 (settled jam state).
     frame = bytes.fromhex("bb02003a0200000007000000000000000000")
-    result = lock._parse_state(frame)
+    result = _parsed_state(lock, frame)
 
     assert result is not None
     assert list(result) == [LockStatus.JAMMED]
@@ -220,7 +223,7 @@ def test_parse_success_op_response_with_0200_trailer_is_no_update(
 
     frame = bytes.fromhex("bb0a00390000000000000000000000000200")
     with caplog.at_level("INFO", logger="yalexs_ble.lock"):
-        result = lock._parse_state(frame)
+        result = _parsed_state(lock, frame)
         lock._internal_state_callback(frame)
 
     assert result is not None
@@ -234,14 +237,44 @@ def test_parse_lock_activity_is_no_update(
     """A LOCK_ACTIVITY (0xBB 0x2D) frame is recognized with no state update."""
     lock = _make_lock()
 
-    frame = bytes.fromhex("bb2d008000000000000000000000000000")
+    frame = bytes.fromhex("bb2d00808000000000000000000000000000")
     with caplog.at_level("INFO", logger="yalexs_ble.lock"):
-        result = lock._parse_state(frame)
+        result = _parsed_state(lock, frame)
         lock._internal_state_callback(frame)
 
     assert result is not None
     assert list(result) == []
     assert "Unknown state" not in caplog.text
+
+
+def test_parse_and_emit_lock_activity() -> None:
+    """A historical lock frame reaches the dedicated activity callback."""
+    received: list[list[LockActivityValue]] = []
+    lock = _make_lock(
+        activity_callback=lambda activities: received.append(list(activities))
+    )
+
+    frame = bytearray(18)
+    frame[0] = 0xBB
+    frame[1] = Commands.LOCK_ACTIVITY.value
+    frame[4] = LockActivityType.LOCK.value
+    frame[5] = LockOperationSource.MANUAL.value
+    frame[6] = LockStatus.LOCKED.value
+    frame[7] = LockOperationRemoteType.BLE.value
+    frame[8:12] = (1_704_110_400).to_bytes(4, byteorder="little")
+
+    parsed_state, parsed_activity = lock._parse_state(frame)
+    lock._internal_state_callback(frame)
+
+    assert parsed_state is None
+    assert parsed_activity is not None
+    assert len(received) == 1
+    assert len(received[0]) == 1
+    activity = received[0][0]
+    assert activity.timestamp == datetime.fromtimestamp(1_704_110_400)
+    assert activity.status is LockStatus.LOCKED
+    assert activity.source is LockOperationSource.MANUAL
+    assert activity.remote_type is None
 
 
 def test_parse_non_mech_error_is_jammed_and_logs_decoded_name(
@@ -255,7 +288,7 @@ def test_parse_non_mech_error_is_jammed_and_logs_decoded_name(
     # log levels, not only in a debug session.
     frame = bytes.fromhex("bb0b00000000000000000000000000320000")
     with caplog.at_level("WARNING", logger="yalexs_ble.lock"):
-        result = lock._parse_state(frame)
+        result = _parsed_state(lock, frame)
 
     assert result is not None
     assert list(result) == [LockStatus.JAMMED]
@@ -271,7 +304,7 @@ def test_parse_unknown_error_code_is_jammed_and_logs_unknown(
 
     frame = bytes.fromhex("bb0b00000000000000000000000000770000")
     with caplog.at_level("WARNING", logger="yalexs_ble.lock"):
-        result = lock._parse_state(frame)
+        result = _parsed_state(lock, frame)
 
     assert result is not None
     assert list(result) == [LockStatus.JAMMED]
@@ -304,7 +337,7 @@ def test_parse_bogus_frame_is_none_and_logs_unknown(
 
     frame = bytes.fromhex("cc00000000000000000000000000000000")
     with caplog.at_level("INFO", logger="yalexs_ble.lock"):
-        assert lock._parse_state(frame) is None
+        assert _parsed_state(lock, frame) is None
         lock._internal_state_callback(frame)
 
     assert "Unknown state" in caplog.text
@@ -314,7 +347,7 @@ def test_parse_ack_still_reports_state() -> None:
     """The AA transport-ack path is unchanged by the op-response decode."""
     lock = _make_lock()
 
-    result = lock._parse_state(bytes.fromhex("aa0b00490000000000000000000000000200"))
+    result = _parsed_state(lock, bytes.fromhex("aa0b00490000000000000000000000000200"))
     assert result is not None
     assert list(result) == [LockStatus.LOCKED]
 
@@ -339,6 +372,7 @@ def test_jammed_maps_to_the_settled_static_position_value() -> None:
 
 def _make_lock(
     state_callback: Callable[[Iterable[LockStateValue]], None] = lambda _: None,
+    activity_callback: Callable[[Iterable[LockActivityValue]], None] | None = None,
 ) -> Lock:
     return Lock(
         lambda: BLEDevice("aa:bb:cc:dd:ee:ff", "lock"),
@@ -346,7 +380,14 @@ def _make_lock(
         1,
         "mylock",
         state_callback,
+        activity_callback=activity_callback,
     )
+
+
+def _parsed_state(lock: Lock, frame: bytes) -> Iterable[LockStateValue] | None:
+    """Return the current-state half of the parser result."""
+    parsed_state, _parsed_activity = lock._parse_state(frame)
+    return parsed_state
 
 
 def test_parse_auto_lock_state_timed_from_wire() -> None:
@@ -549,7 +590,7 @@ def test_parse_state_readsetting_ack_ignored() -> None:
     """
     lock = _make_lock()
     ack = bytes.fromhex("aa0400282800000000000000000000000200")
-    assert lock._parse_state(ack) == ()
+    assert _parsed_state(lock, ack) == ()
 
 
 def test_parse_state_writesetting_ack_ignored() -> None:
@@ -561,7 +602,7 @@ def test_parse_state_writesetting_ack_ignored() -> None:
     """
     lock = _make_lock()
     ack = bytes.fromhex("aa030075280000005a005a00000000000200")
-    assert lock._parse_state(ack) == ()
+    assert _parsed_state(lock, ack) == ()
 
 
 def test_parse_state_ack_for_other_opcode_is_unknown() -> None:
@@ -576,7 +617,7 @@ def test_parse_state_ack_for_other_opcode_is_unknown() -> None:
     """
     lock = _make_lock()
     ack = bytes.fromhex("aa2d00282800000000000000000000000200")
-    assert lock._parse_state(ack) is None
+    assert _parsed_state(lock, ack) is None
 
 
 def test_settings_response_matcher_takes_value_frame_not_ack() -> None:
