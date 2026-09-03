@@ -6,6 +6,8 @@ from collections.abc import Callable, Iterable
 from functools import partial
 from typing import Any, Protocol
 
+from bleak.exc import BleakError
+
 from .const import (
     LOCK_ACTIVITY_POLL_RETRIES,
     LOCK_ACTIVITY_POLL_RETRY_EXPONENTIAL_BACKOFF_SECONDS,
@@ -16,6 +18,7 @@ from .const import (
     LockInfo,
 )
 from .lock import Lock
+from .session import DisconnectedError, ResponseError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,6 +37,8 @@ class LockBridge(Protocol):
     def loop(self) -> Any: ...
 
     async def ensure_connected(self) -> Lock: ...
+
+    async def handle_disconnected(self, exc: Exception) -> None: ...
 
 
 class ActivityManager:
@@ -172,18 +177,59 @@ class ActivityManager:
 
         _LOGGER.debug("%s: Starting deferred activity update", self._lock.name)
 
-        lock = await self._lock.ensure_connected()
-        first_result = await lock.lock_activity()
+        try:
+            lock = await self._lock.ensure_connected()
+            first_result = await lock.lock_activity()
 
-        if not first_result:
-            if retries < max_retries:
+            if not first_result:
+                if retries < max_retries:
+                    _LOGGER.debug(
+                        "%s: No activity found while polling on attempt %s; "
+                        "retrying up to %s more times",
+                        self._lock.name,
+                        retries,
+                        max_retries - retries,
+                    )
+                    self.schedule_activity_poll(
+                        backoff * (2**retries),
+                        retries=retries + 1,
+                        max_retries=max_retries,
+                        backoff=backoff,
+                    )
+                else:
+                    _LOGGER.debug(
+                        "%s: No activity found while polling after maximum of "
+                        "%s retries",
+                        self._lock.name,
+                        max_retries,
+                    )
+                return
+
+            # Continue to fetch activity while some is available.
+            while (await lock.lock_activity()) is not None:
+                pass
+        except asyncio.CancelledError:
+            raise
+        except (BleakError, DisconnectedError, ResponseError) as err:
+            # Activity polling used to be the one path that bypassed the
+            # PushLock retry wrapper. A transient GATT 133 therefore escaped
+            # from this background task and stopped activity collection until
+            # another update happened to schedule a new poll.
+            _LOGGER.warning(
+                "%s: Activity poll lost the Bluetooth connection: %s",
+                self._lock.name,
+                err,
+            )
+            try:
+                await self._lock.handle_disconnected(err)
+            except Exception:  # pylint: disable=broad-except
                 _LOGGER.debug(
-                    "%s: No activity found while polling on attempt %s; "
-                    "retrying up to %s more times",
+                    "%s: Failed to clean up after activity poll disconnect",
                     self._lock.name,
-                    retries,
-                    max_retries - retries,
+                    exc_info=True,
                 )
+
+            if retries < max_retries:
                 self.schedule_activity_poll(
                     backoff * (2**retries),
                     retries=retries + 1,
@@ -191,13 +237,12 @@ class ActivityManager:
                     backoff=backoff,
                 )
             else:
-                _LOGGER.debug(
-                    "%s: No activity found while polling after maximum of %s retries",
+                _LOGGER.warning(
+                    "%s: Activity poll stopped after the maximum of %s retries",
                     self._lock.name,
                     max_retries,
                 )
-            return
-
-        # Continue to fetch activity while some is available.
-        while (await lock.lock_activity()) is not None:
-            pass
+        except Exception:  # pylint: disable=broad-except
+            # Do not leave an unobserved exception in the background task. Keep
+            # the traceback in the log for actual programming/protocol errors.
+            _LOGGER.exception("%s: Unexpected activity poll failure", self._lock.name)

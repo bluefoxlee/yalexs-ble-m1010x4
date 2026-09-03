@@ -311,6 +311,10 @@ class PushLockBridge:
     async def ensure_connected(self) -> Lock:
         return await self._lock._ensure_connected()
 
+    async def handle_disconnected(self, exc: Exception) -> None:
+        """Reset the shared connection after an activity poll disconnects."""
+        await self._lock._async_handle_disconnected(exc)
+
 
 class PushLock:
     """A lock with push updates."""

@@ -14,6 +14,7 @@ from yalexs_ble.const import (
     LockOperationSource,
     LockStatus,
 )
+from yalexs_ble.session import DisconnectedError
 
 
 def _activity() -> LockActivity:
@@ -59,6 +60,29 @@ async def test_activity_poll_drains_until_lock_reports_no_activity() -> None:
     await manager._execute_activity_poll(retries=0, max_retries=0, backoff=1)
 
     assert lock.lock_activity.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_activity_poll_recovers_from_disconnected_error() -> None:
+    bridge = MagicMock(
+        name="front door",
+        lock_info=LockInfo("Yale", "ASL-03", "123", "1.0"),
+        connection_info=ConnectionInfo(-42),
+    )
+    lock = MagicMock()
+    lock.lock_activity = AsyncMock(side_effect=DisconnectedError("GATT 133"))
+    bridge.ensure_connected = AsyncMock(return_value=lock)
+    bridge.handle_disconnected = AsyncMock()
+    manager = ActivityManager(bridge)
+    manager.register_activity_callback(lambda *_args: None)
+    manager.schedule_activity_poll = MagicMock()
+
+    await manager._execute_activity_poll(retries=0, max_retries=1, backoff=1)
+
+    bridge.handle_disconnected.assert_awaited_once()
+    manager.schedule_activity_poll.assert_called_once_with(
+        1, retries=1, max_retries=1, backoff=1
+    )
 
 
 @pytest.mark.asyncio

@@ -740,7 +740,12 @@ class Lock:
                 source=LockOperationSource.PIN,
                 slot=pin_slot,
             )
-        _LOGGER.warning("%s: Unknown activity type: 0x%02X", self.name, activity_type)
+        _LOGGER.warning(
+            "%s: Unknown activity type: 0x%02X frame=%s",
+            self.name,
+            activity_type,
+            response.hex(),
+        )
         return None
 
     @raise_if_not_connected

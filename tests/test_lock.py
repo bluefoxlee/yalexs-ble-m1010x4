@@ -277,6 +277,21 @@ def test_parse_and_emit_lock_activity() -> None:
     assert activity.remote_type is None
 
 
+def test_parse_unknown_lock_activity_logs_raw_frame(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Unknown activity types retain the raw frame for protocol analysis."""
+    lock = _make_lock()
+    frame = bytes.fromhex("bb2d000007000102030405060708090a0b0c")
+
+    with caplog.at_level("WARNING", logger="yalexs_ble.lock"):
+        result = lock._parse_lock_activity(frame)
+
+    assert result is None
+    assert "Unknown activity type: 0x07" in caplog.text
+    assert f"frame={frame.hex()}" in caplog.text
+
+
 def test_parse_non_mech_error_is_jammed_and_logs_decoded_name(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
