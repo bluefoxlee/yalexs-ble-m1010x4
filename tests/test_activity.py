@@ -51,6 +51,7 @@ async def test_activity_poll_drains_until_lock_reports_no_activity() -> None:
         lock_info=LockInfo("Yale", "ASL-03", "123", "1.0"),
         connection_info=ConnectionInfo(-42),
     )
+    bridge.operation_lock = asyncio.Lock()
     lock = MagicMock()
     lock.lock_activity = AsyncMock(side_effect=[_activity(), _activity(), None])
     bridge.ensure_connected = AsyncMock(return_value=lock)
@@ -69,6 +70,7 @@ async def test_activity_poll_recovers_from_disconnected_error() -> None:
         lock_info=LockInfo("Yale", "ASL-03", "123", "1.0"),
         connection_info=ConnectionInfo(-42),
     )
+    bridge.operation_lock = asyncio.Lock()
     lock = MagicMock()
     lock.lock_activity = AsyncMock(side_effect=DisconnectedError("GATT 133"))
     bridge.ensure_connected = AsyncMock(return_value=lock)
@@ -92,6 +94,7 @@ async def test_forced_disconnect_cancels_pending_activity_poll() -> None:
         lock_info=LockInfo("Yale", "ASL-03", "123", "1.0"),
         connection_info=ConnectionInfo(-42),
     )
+    bridge.operation_lock = asyncio.Lock()
     lock = MagicMock()
     blocker = asyncio.Event()
 

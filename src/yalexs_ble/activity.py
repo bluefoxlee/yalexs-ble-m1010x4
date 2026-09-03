@@ -36,6 +36,9 @@ class LockBridge(Protocol):
     @property
     def loop(self) -> Any: ...
 
+    @property
+    def operation_lock(self) -> asyncio.Lock: ...
+
     async def ensure_connected(self) -> Lock: ...
 
     async def handle_disconnected(self, exc: Exception) -> None: ...
@@ -178,36 +181,41 @@ class ActivityManager:
         _LOGGER.debug("%s: Starting deferred activity update", self._lock.name)
 
         try:
-            lock = await self._lock.ensure_connected()
-            first_result = await lock.lock_activity()
+            # Activity polling shares the PushLock connection with the normal
+            # YBA state/update path. Serialize the history command with lock
+            # operations and state reads so the ESPHome proxy never receives
+            # two GATT writes on the same Yale session at once.
+            async with self._lock.operation_lock:
+                lock = await self._lock.ensure_connected()
+                first_result = await lock.lock_activity()
 
-            if not first_result:
-                if retries < max_retries:
-                    _LOGGER.debug(
-                        "%s: No activity found while polling on attempt %s; "
-                        "retrying up to %s more times",
-                        self._lock.name,
-                        retries,
-                        max_retries - retries,
-                    )
-                    self.schedule_activity_poll(
-                        backoff * (2**retries),
-                        retries=retries + 1,
-                        max_retries=max_retries,
-                        backoff=backoff,
-                    )
-                else:
-                    _LOGGER.debug(
-                        "%s: No activity found while polling after maximum of "
-                        "%s retries",
-                        self._lock.name,
-                        max_retries,
-                    )
-                return
+                if not first_result:
+                    if retries < max_retries:
+                        _LOGGER.debug(
+                            "%s: No activity found while polling on attempt %s; "
+                            "retrying up to %s more times",
+                            self._lock.name,
+                            retries,
+                            max_retries - retries,
+                        )
+                        self.schedule_activity_poll(
+                            backoff * (2**retries),
+                            retries=retries + 1,
+                            max_retries=max_retries,
+                            backoff=backoff,
+                        )
+                    else:
+                        _LOGGER.debug(
+                            "%s: No activity found while polling after maximum of "
+                            "%s retries",
+                            self._lock.name,
+                            max_retries,
+                        )
+                    return
 
-            # Continue to fetch activity while some is available.
-            while (await lock.lock_activity()) is not None:
-                pass
+                # Continue to fetch activity while some is available.
+                while (await lock.lock_activity()) is not None:
+                    pass
         except asyncio.CancelledError:
             raise
         except (BleakError, DisconnectedError, ResponseError) as err:

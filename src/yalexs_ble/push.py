@@ -308,6 +308,10 @@ class PushLockBridge:
     def loop(self) -> Any:
         return self._lock.loop
 
+    @property
+    def operation_lock(self) -> asyncio.Lock:
+        return self._lock._operation_lock
+
     async def ensure_connected(self) -> Lock:
         return await self._lock._ensure_connected()
 
