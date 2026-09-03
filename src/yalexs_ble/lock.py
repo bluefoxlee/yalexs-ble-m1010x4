@@ -163,6 +163,7 @@ class Lock:
         self._disconnect_callback = disconnect_callback
         self._disconnected_futures: set[asyncio.Future[None]] = set()
         self._activity_callback = activity_callback
+        self._last_activity_was_unknown = False
 
     def set_name(self, name: str) -> None:
         self.name = name
@@ -693,6 +694,7 @@ class Lock:
         self, response: bytes
     ) -> DoorActivity | LockActivity | None:
         """Parse the lock activity from the response."""
+        self._last_activity_was_unknown = False
         # We only know a subset of lock activities currently
         # response[0x04] seems to be the activity type
         # the rest of the response is data for the activity,
@@ -746,7 +748,13 @@ class Lock:
             activity_type,
             response.hex(),
         )
+        self._last_activity_was_unknown = True
         return None
+
+    @property
+    def last_activity_was_unknown(self) -> bool:
+        """Return whether the most recent activity response was unknown."""
+        return self._last_activity_was_unknown
 
     @raise_if_not_connected
     async def lock_activity(self) -> DoorActivity | LockActivity | None:

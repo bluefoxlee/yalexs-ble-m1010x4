@@ -53,6 +53,7 @@ async def test_activity_poll_drains_until_lock_reports_no_activity() -> None:
     )
     bridge.operation_lock = asyncio.Lock()
     lock = MagicMock()
+    lock.last_activity_was_unknown = False
     lock.lock_activity = AsyncMock(side_effect=[_activity(), _activity(), None])
     bridge.ensure_connected = AsyncMock(return_value=lock)
     manager = ActivityManager(bridge)
@@ -72,6 +73,7 @@ async def test_activity_poll_recovers_from_disconnected_error() -> None:
     )
     bridge.operation_lock = asyncio.Lock()
     lock = MagicMock()
+    lock.last_activity_was_unknown = False
     lock.lock_activity = AsyncMock(side_effect=DisconnectedError("GATT 133"))
     bridge.ensure_connected = AsyncMock(return_value=lock)
     bridge.handle_disconnected = AsyncMock()
@@ -85,6 +87,36 @@ async def test_activity_poll_recovers_from_disconnected_error() -> None:
     manager.schedule_activity_poll.assert_called_once_with(
         1, retries=1, max_retries=1, backoff=1
     )
+
+
+@pytest.mark.asyncio
+async def test_activity_poll_skips_unknown_record_and_drains_following_records() -> (
+    None
+):
+    bridge = MagicMock(
+        name="front door",
+        lock_info=LockInfo("Yale", "ASL-03", "123", "1.0"),
+        connection_info=ConnectionInfo(-42),
+    )
+    bridge.operation_lock = asyncio.Lock()
+    lock = MagicMock()
+    lock.last_activity_was_unknown = False
+    results = [None, _activity(), None]
+    unknown_flags = [True, False, False]
+
+    async def lock_activity() -> LockActivity | None:
+        result = results.pop(0)
+        lock.last_activity_was_unknown = unknown_flags.pop(0)
+        return result
+
+    lock.lock_activity = lock_activity
+    bridge.ensure_connected = AsyncMock(return_value=lock)
+    manager = ActivityManager(bridge)
+    manager.register_activity_callback(lambda *_args: None)
+
+    await manager._execute_activity_poll(retries=0, max_retries=0, backoff=1)
+
+    assert not results
 
 
 @pytest.mark.asyncio

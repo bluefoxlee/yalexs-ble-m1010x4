@@ -22,6 +22,8 @@ from .session import DisconnectedError, ResponseError
 
 _LOGGER = logging.getLogger(__name__)
 
+MAX_CONSECUTIVE_UNKNOWN_ACTIVITY_RECORDS = 3
+
 
 class LockBridge(Protocol):
     @property
@@ -188,8 +190,9 @@ class ActivityManager:
             async with self._lock.operation_lock:
                 lock = await self._lock.ensure_connected()
                 first_result = await lock.lock_activity()
+                first_was_unknown = lock.last_activity_was_unknown
 
-                if not first_result:
+                if not first_result and not first_was_unknown:
                     if retries < max_retries:
                         _LOGGER.debug(
                             "%s: No activity found while polling on attempt %s; "
@@ -213,9 +216,27 @@ class ActivityManager:
                         )
                     return
 
-                # Continue to fetch activity while some is available.
-                while (await lock.lock_activity()) is not None:
-                    pass
+                # Unknown records are still records. Do not mistake one for
+                # the end-of-history marker, or a later valid unlock/door
+                # record would remain unread. Keep a cap in case a firmware
+                # repeats the same unknown response forever.
+                unknown_records = int(first_was_unknown)
+                while unknown_records < MAX_CONSECUTIVE_UNKNOWN_ACTIVITY_RECORDS:
+                    result = await lock.lock_activity()
+                    if result is None:
+                        if not lock.last_activity_was_unknown:
+                            break
+                        unknown_records += 1
+                        continue
+                    unknown_records = 0
+
+                if unknown_records >= MAX_CONSECUTIVE_UNKNOWN_ACTIVITY_RECORDS:
+                    _LOGGER.warning(
+                        "%s: Stopped activity drain after %s consecutive "
+                        "unknown records",
+                        self._lock.name,
+                        MAX_CONSECUTIVE_UNKNOWN_ACTIVITY_RECORDS,
+                    )
         except asyncio.CancelledError:
             raise
         except (BleakError, DisconnectedError, ResponseError) as err:
