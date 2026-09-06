@@ -313,9 +313,12 @@ class Lock:
             return (), None  # success: recognized, no state update
 
         if command == Commands.LOCK_ACTIVITY.value:
-            if activity := self._parse_lock_activity(state):
-                return None, [activity]
-            return (), None  # recognized, but there is no activity to report
+            # LOCK_ACTIVITY is a solicited poll. Session delivers the same
+            # frame to this callback before resolving the waiter, and
+            # lock_activity() parses and emits it after the waiter resolves.
+            # Parsing here as well would log unknown frames twice and emit
+            # known activities twice.
+            return (), None
 
         if command == Commands.GETSTATUS.value:
             status_type = state[4]
@@ -805,7 +808,10 @@ class Lock:
             _poll_response_matcher(Commands.LOCK_ACTIVITY.value),
         )
         _LOGGER.debug("%s: Finished executing lock_activity", self.name)
-        return self._parse_lock_activity(response)
+        activity = self._parse_lock_activity(response)
+        if activity is not None and self._activity_callback:
+            self._activity_callback([activity])
+        return activity
 
     async def disconnect(self) -> None:
         """Disconnect from the lock."""

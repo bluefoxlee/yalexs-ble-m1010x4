@@ -249,8 +249,9 @@ def test_parse_lock_activity_is_no_update(
     assert "Unknown state" not in caplog.text
 
 
-def test_parse_and_emit_lock_activity() -> None:
-    """A historical lock frame reaches the dedicated activity callback."""
+@pytest.mark.asyncio
+async def test_lock_activity_emits_callback_once() -> None:
+    """A solicited historical frame reaches the callback exactly once."""
     received: list[list[LockActivityValue]] = []
     lock = _make_lock(
         activity_callback=lambda activities: received.append(list(activities))
@@ -265,18 +266,59 @@ def test_parse_and_emit_lock_activity() -> None:
     frame[7] = LockOperationRemoteType.BLE.value
     frame[8:12] = (1_704_110_400).to_bytes(4, byteorder="little")
 
-    parsed_state, parsed_activity = lock._parse_state(frame)
-    lock._internal_state_callback(frame)
+    lock.client = MagicMock(is_connected=True)
+    lock.session = MagicMock()
+    lock.secure_session = MagicMock()
+    lock.session.build_command.return_value = bytearray(18)
 
-    assert parsed_state is None
-    assert parsed_activity is not None
+    async def execute(*_args: object, **_kwargs: object) -> bytes:
+        # Session invokes the internal callback before resolving the waiter.
+        lock._internal_state_callback(frame)
+        return bytes(frame)
+
+    lock.session.execute = AsyncMock(side_effect=execute)
+
+    activity = await lock.lock_activity()
+
+    assert activity is not None
     assert len(received) == 1
     assert len(received[0]) == 1
-    activity = received[0][0]
-    assert activity.timestamp == datetime.fromtimestamp(1_704_110_400)
-    assert activity.status is LockStatus.LOCKED
-    assert activity.source is LockOperationSource.MANUAL
-    assert activity.remote_type is None
+    received_activity = received[0][0]
+    assert received_activity.timestamp == datetime.fromtimestamp(1_704_110_400)
+    assert received_activity.status is LockStatus.LOCKED
+    assert received_activity.source is LockOperationSource.MANUAL
+    assert received_activity.remote_type is None
+
+
+@pytest.mark.asyncio
+async def test_lock_activity_unknown_frame_logs_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A solicited unknown historical frame is logged only once."""
+    lock = _make_lock()
+    frame = bytes.fromhex("bb2d000007000102030405060708090a0b0c")
+    lock.client = MagicMock(is_connected=True)
+    lock.session = MagicMock()
+    lock.secure_session = MagicMock()
+    lock.session.build_command.return_value = bytearray(18)
+
+    async def execute(*_args: object, **_kwargs: object) -> bytes:
+        lock._internal_state_callback(frame)
+        return frame
+
+    lock.session.execute = AsyncMock(side_effect=execute)
+
+    with caplog.at_level("WARNING", logger="yalexs_ble.lock"):
+        result = await lock.lock_activity()
+
+    assert result is None
+    assert lock.last_activity_was_unknown
+    assert (
+        caplog.messages.count(
+            "mylock: Unknown activity type: 0x07 frame=" + frame.hex()
+        )
+        == 1
+    )
 
 
 def test_parse_unknown_lock_activity_logs_raw_frame(
