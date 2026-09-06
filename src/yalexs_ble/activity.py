@@ -22,7 +22,10 @@ from .session import DisconnectedError, ResponseError
 
 _LOGGER = logging.getLogger(__name__)
 
-MAX_CONSECUTIVE_UNKNOWN_ACTIVITY_RECORDS = 3
+# Some lock variants use an activity type that is not decoded yet. Allow a
+# larger bounded drain so a batch of unknown records is not truncated while
+# retaining a guard against a firmware response that repeats forever.
+MAX_CONSECUTIVE_UNKNOWN_ACTIVITY_RECORDS = 10
 
 
 class LockBridge(Protocol):
