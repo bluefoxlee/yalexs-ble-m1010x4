@@ -131,6 +131,28 @@ def _settings_response_matcher(
     return matches
 
 
+def _poll_response_matcher(
+    opcode: int, subtype: int | None = None
+) -> Callable[[bytes], bool]:
+    """Match the 0xBB frame answering one status or activity poll.
+
+    A valid unsolicited notification can arrive while a poll is waiting for
+    its response.  Match the opcode, and optionally the subtype, so a
+    GETSTATUS/DOOR_ONLY frame cannot be returned as the answer to a
+    LOCK_ACTIVITY request and then misparsed as an activity record.
+    """
+
+    def matches(data: bytes) -> bool:
+        return (
+            len(data) > 0x04
+            and data[0x00] == 0xBB
+            and data[0x01] == opcode
+            and (subtype is None or data[0x04] == subtype)
+        )
+
+    return matches
+
+
 class Lock:
     def __init__(
         self,
@@ -528,12 +550,16 @@ class Lock:
             await self.force_unlock()
 
     async def _execute_command(
-        self, opcode: int, cmd_byte: int, command_name: str
+        self,
+        opcode: int,
+        cmd_byte: int,
+        command_name: str,
+        response_matcher: Callable[[bytes], bool] | None = None,
     ) -> bytes:
         assert self.session is not None  # nosec
         command = self.session.build_operation_command(opcode, cmd_byte)
         _LOGGER.debug("%s: send: [%s] [%s]", self.name, command.hex(), hex(cmd_byte))
-        response = await self.session.execute(command, command_name)
+        response = await self.session.execute(command, command_name, response_matcher)
         _LOGGER.debug(
             "%s: response: [%s] [%s]", self.name, response.hex(), hex(cmd_byte)
         )
@@ -596,7 +622,12 @@ class Lock:
         _LOGGER.debug("%s: Executing lock_status", self.name)
         # We used to use 0x2F here but it seems to be broken on some locks
         response = await self._execute_command(
-            Commands.GETSTATUS, StatusType.LOCK_ONLY, "lock_status"
+            Commands.GETSTATUS,
+            StatusType.LOCK_ONLY,
+            "lock_status",
+            _poll_response_matcher(
+                Commands.GETSTATUS.value, StatusType.LOCK_ONLY.value
+            ),
         )
         _LOGGER.debug("%s: Finished executing lock_status", self.name)
         return self._parse_lock_status(response[0x08])
@@ -606,7 +637,12 @@ class Lock:
         _LOGGER.debug("%s: Executing door_status", self.name)
         # We used to use 0x2F here but it seems to be broken on some locks
         response = await self._execute_command(
-            Commands.GETSTATUS, StatusType.DOOR_ONLY, "door_status"
+            Commands.GETSTATUS,
+            StatusType.DOOR_ONLY,
+            "door_status",
+            _poll_response_matcher(
+                Commands.GETSTATUS.value, StatusType.DOOR_ONLY.value
+            ),
         )
         _LOGGER.debug("%s: Finished executing door_status", self.name)
         return self._parse_door_status(response[0x08])
@@ -626,7 +662,10 @@ class Lock:
     async def battery(self) -> BatteryState:
         _LOGGER.debug("%s: Executing battery", self.name)
         response = await self._execute_command(
-            Commands.GETSTATUS, StatusType.BATTERY, "battery"
+            Commands.GETSTATUS,
+            StatusType.BATTERY,
+            "battery",
+            _poll_response_matcher(Commands.GETSTATUS.value, StatusType.BATTERY.value),
         )
         _LOGGER.debug("%s: Finished executing battery", self.name)
         return self._parse_battery_state(response)
@@ -761,7 +800,9 @@ class Lock:
         _LOGGER.debug("%s: Executing lock_activity", self.name)
         assert self.session is not None  # nosec
         response = await self.session.execute(
-            self.session.build_command(Commands.LOCK_ACTIVITY.value), "lock_activity"
+            self.session.build_command(Commands.LOCK_ACTIVITY.value),
+            "lock_activity",
+            _poll_response_matcher(Commands.LOCK_ACTIVITY.value),
         )
         _LOGGER.debug("%s: Finished executing lock_activity", self.name)
         return self._parse_lock_activity(response)

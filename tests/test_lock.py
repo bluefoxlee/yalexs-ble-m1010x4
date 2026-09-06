@@ -24,10 +24,12 @@ from yalexs_ble.const import (
     LockStateValue,
     LockStatus,
     SettingType,
+    StatusType,
 )
 from yalexs_ble.lock import (
     AA_BATTERY_VOLTAGE_TO_PERCENTAGE,
     Lock,
+    _poll_response_matcher,
     _settings_response_matcher,
     convert_voltage_to_percentage,
 )
@@ -656,6 +658,28 @@ def test_settings_response_matcher_takes_value_frame_not_ack() -> None:
     assert not write_matcher(read_response)  # wrong opcode for the write
     assert not write_matcher(battery_answer)
     assert not write_matcher(write_response[:4])  # truncated below the setting id
+
+
+def test_poll_response_matcher_rejects_foreign_status_frame() -> None:
+    """An unrelated GETSTATUS frame must not answer a LOCK_ACTIVITY poll."""
+    activity_matcher = _poll_response_matcher(Commands.LOCK_ACTIVITY.value)
+    activity_frame = bytes.fromhex("bb2d004207f92c9d6a1300642419eeff0200")
+    door_status_frame = bytes.fromhex("bb0200142e00000001000000000000000000")
+
+    assert activity_matcher(activity_frame)
+    assert not activity_matcher(door_status_frame)
+
+
+def test_poll_response_matcher_can_match_a_status_subtype() -> None:
+    """A typed GETSTATUS poll accepts only the requested status subtype."""
+    door_matcher = _poll_response_matcher(
+        Commands.GETSTATUS.value, StatusType.DOOR_ONLY.value
+    )
+    door_frame = bytes.fromhex("bb0200142e00000001000000000000000000")
+    auto_lock_frame = bytes.fromhex("bb0200142800000001000000000000000000")
+
+    assert door_matcher(door_frame)
+    assert not door_matcher(auto_lock_frame)
 
 
 _CHAR_DATA: dict[str, bytes] = {
