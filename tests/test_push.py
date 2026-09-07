@@ -192,6 +192,30 @@ def test_needs_battery_workaround():
 
 
 @pytest.mark.asyncio
+async def test_state_callback_schedules_activity_poll() -> None:
+    """Live YBA state notifications also trigger history polling."""
+    push_lock = PushLock(
+        address="aa:bb:cc:dd:ee:ff",
+        key="0800200c9a66",
+        key_index=1,
+        always_connected=False,
+    )
+    push_lock._activity_manager.schedule_activity_poll = MagicMock()
+    push_lock._callback_state(
+        LockState(
+            lock=LockStatus.LOCKED,
+            door=DoorStatus.CLOSED,
+            battery=None,
+            auth=None,
+            auto_lock=None,
+            auto_lock_prev=None,
+        )
+    )
+
+    push_lock._activity_manager.schedule_activity_poll.assert_called_once_with(30)
+
+
+@pytest.mark.asyncio
 async def test_update_continues_after_battery_timeout():
     """
     Test that _update() continues and completes successfully

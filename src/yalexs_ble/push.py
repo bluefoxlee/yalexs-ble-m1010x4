@@ -1317,6 +1317,13 @@ class PushLock:
             self._lock_info,
             self.connection_info,
         )
+        # Some state changes arrive through the live notification path rather
+        # than at the end of a complete _update() cycle. Schedule the history
+        # poll here too so Activity does not depend on which YBA path delivered
+        # the state change.
+        self._activity_manager.schedule_activity_poll(
+            LOCK_ACTIVITY_POLL_INITIAL_DELAY_DURING_UPDATE
+        )
         if not self._callbacks:
             return
         assert self._lock_info is not None  # nosec
