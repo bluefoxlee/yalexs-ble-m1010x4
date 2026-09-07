@@ -87,6 +87,20 @@ async def test_activity_poll_schedules_follow_up_when_history_is_empty() -> None
     manager.schedule_activity_poll.assert_called_once_with(LOCK_ACTIVITY_POLL_INTERVAL)
 
 
+def test_activity_poll_does_not_replace_existing_poll_when_not_requested() -> None:
+    """Live YBA updates must not starve a pending activity poll."""
+    bridge = MagicMock(name="front door")
+    manager = ActivityManager(bridge)
+    manager._activity_callbacks.append(lambda *_args: None)
+    timer = MagicMock()
+    manager._cancel_deferred_activity_poll = timer
+
+    manager.schedule_activity_poll(30, replace=False)
+
+    assert manager._cancel_deferred_activity_poll is timer
+    timer.cancel.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_activity_poll_recovers_from_disconnected_error() -> None:
     bridge = MagicMock(

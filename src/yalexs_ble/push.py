@@ -1268,7 +1268,8 @@ class PushLock:
             )
 
         self._activity_manager.schedule_activity_poll(
-            LOCK_ACTIVITY_POLL_INITIAL_DELAY_DURING_UPDATE
+            LOCK_ACTIVITY_POLL_INITIAL_DELAY_DURING_UPDATE,
+            replace=False,
         )
 
         if not has_lock_info:
@@ -1323,7 +1324,8 @@ class PushLock:
         # poll here too so Activity does not depend on which YBA path delivered
         # the state change.
         self._activity_manager.schedule_activity_poll(
-            LOCK_ACTIVITY_POLL_INITIAL_DELAY_DURING_UPDATE
+            LOCK_ACTIVITY_POLL_INITIAL_DELAY_DURING_UPDATE,
+            replace=False,
         )
         if not self._callbacks:
             return

@@ -134,6 +134,8 @@ class ActivityManager:
         retries: int = 0,
         max_retries: int = LOCK_ACTIVITY_POLL_RETRIES,
         backoff: float = LOCK_ACTIVITY_POLL_RETRY_EXPONENTIAL_BACKOFF_SECONDS,
+        *,
+        replace: bool = True,
     ) -> None:
         """Schedule an activity poll in future seconds.
 
@@ -141,6 +143,16 @@ class ActivityManager:
         activity for the Yale/August app to consume).
         """
         if not self._activity_callbacks:
+            return
+
+        if not replace and (
+            self._cancel_deferred_activity_poll
+            or (self._activity_poll_task and not self._activity_poll_task.done())
+        ):
+            _LOGGER.debug(
+                "%s: Keeping already scheduled activity poll",
+                self._lock.name,
+            )
             return
 
         _LOGGER.debug(

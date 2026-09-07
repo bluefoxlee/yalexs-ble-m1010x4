@@ -212,7 +212,9 @@ async def test_state_callback_schedules_activity_poll() -> None:
         )
     )
 
-    push_lock._activity_manager.schedule_activity_poll.assert_called_once_with(30)
+    push_lock._activity_manager.schedule_activity_poll.assert_called_once_with(
+        30, replace=False
+    )
 
 
 @pytest.mark.asyncio
