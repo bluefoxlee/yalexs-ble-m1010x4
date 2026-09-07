@@ -23,6 +23,7 @@ from yalexs_ble.const import (
     LockOperationSource,
     LockStateValue,
     LockStatus,
+    RawActivity,
     SettingType,
     StatusType,
 )
@@ -294,7 +295,7 @@ async def test_lock_activity_emits_callback_once() -> None:
 async def test_lock_activity_unknown_frame_logs_once(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A solicited unknown historical frame is logged only once."""
+    """A solicited 0x07 historical frame is emitted as a raw activity once."""
     lock = _make_lock()
     frame = bytes.fromhex("bb2d000007000102030405060708090a0b0c")
     lock.client = MagicMock(is_connected=True)
@@ -308,31 +309,34 @@ async def test_lock_activity_unknown_frame_logs_once(
 
     lock.session.execute = AsyncMock(side_effect=execute)
 
-    with caplog.at_level("WARNING", logger="yalexs_ble.lock"):
+    received: list[list[LockActivityValue]] = []
+    lock._activity_callback = lambda activities: received.append(list(activities))
+
+    with caplog.at_level("DEBUG", logger="yalexs_ble.lock"):
         result = await lock.lock_activity()
 
-    assert result is None
-    assert lock.last_activity_was_unknown
-    assert (
-        caplog.messages.count(
-            "mylock: Unknown activity type: 0x07 frame=" + frame.hex()
-        )
-        == 1
-    )
+    assert isinstance(result, RawActivity)
+    assert result.activity_type == 0x07
+    assert result.raw_frame == frame.hex()
+    assert result.pin_id == 0x09
+    assert not lock.last_activity_was_unknown
+    assert len(received) == 1
+    assert len(received[0]) == 1
+    assert "Unknown activity type: 0x07" not in caplog.text
 
 
 def test_parse_unknown_lock_activity_logs_raw_frame(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Unknown activity types retain the raw frame for protocol analysis."""
+    """Still-unknown activity types retain the raw frame for analysis."""
     lock = _make_lock()
-    frame = bytes.fromhex("bb2d000007000102030405060708090a0b0c")
+    frame = bytes.fromhex("bb2d009909000102030405060708090a0b0c")
 
     with caplog.at_level("WARNING", logger="yalexs_ble.lock"):
         result = lock._parse_lock_activity(frame)
 
     assert result is None
-    assert "Unknown activity type: 0x07" in caplog.text
+    assert "Unknown activity type: 0x09" in caplog.text
     assert f"frame={frame.hex()}" in caplog.text
 
 

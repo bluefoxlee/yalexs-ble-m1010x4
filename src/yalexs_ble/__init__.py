@@ -9,6 +9,7 @@ from .const import (
     LockInfo,
     LockState,
     LockStatus,
+    RawActivity,
     YaleXSBLEDiscovery,
 )
 from .lock import Lock
@@ -38,6 +39,7 @@ __all__ = [
     "LockState",
     "LockStatus",
     "PushLock",
+    "RawActivity",
     "ValidatedLockConfig",
     "YaleXSBLEDiscovery",
     "YaleXSBLEError",

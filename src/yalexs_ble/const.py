@@ -224,7 +224,17 @@ class DoorActivity:
     status: DoorStatus
 
 
-LockActivityValue = DoorActivity | LockActivity
+@dataclass
+class RawActivity:
+    """An activity record whose lock-specific format is not fully decoded."""
+
+    timestamp: datetime
+    activity_type: int
+    raw_frame: str
+    pin_id: int | None = None
+
+
+LockActivityValue = DoorActivity | LockActivity | RawActivity
 
 
 @dataclass

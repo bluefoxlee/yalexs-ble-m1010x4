@@ -41,6 +41,7 @@ from .const import (
     LockStateValue,
     LockStatus,
     OperationError,
+    RawActivity,
     SettingType,
     StatusType,
 )
@@ -734,7 +735,7 @@ class Lock:
 
     def _parse_lock_activity(
         self, response: bytes
-    ) -> DoorActivity | LockActivity | None:
+    ) -> DoorActivity | LockActivity | RawActivity | None:
         """Parse the lock activity from the response."""
         self._last_activity_was_unknown = False
         # We only know a subset of lock activities currently
@@ -784,6 +785,28 @@ class Lock:
                 source=LockOperationSource.PIN,
                 slot=pin_slot,
             )
+        if activity_type == 0x07:
+            # M1010X4 locks return keypad/PIN records with a lock-specific
+            # activity type. The timestamp layout matches the known PIN
+            # record, and byte 0x0E has remained stable for each tested PIN.
+            # Keep the record explicitly provisional: the value is an
+            # observed internal credential identifier, not a confirmed Yale
+            # slot number, and the remaining fields are intentionally raw.
+            timestamp = self._parse_unix_timestamp(response[0x05:0x09])
+            pin_id = response[0x0E]
+            _LOGGER.debug(
+                "%s: Parsed provisional activity type 0x07 pin_id=0x%02X frame=%s",
+                self.name,
+                pin_id,
+                response.hex(),
+            )
+            return RawActivity(
+                timestamp=timestamp,
+                activity_type=activity_type,
+                raw_frame=response.hex(),
+                pin_id=pin_id,
+            )
+
         _LOGGER.warning(
             "%s: Unknown activity type: 0x%02X frame=%s",
             self.name,
