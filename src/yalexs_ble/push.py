@@ -41,6 +41,7 @@ from .const import (
     LockState,
     LockStateValue,
     LockStatus,
+    RawActivity,
 )
 from .lock import Lock
 from .session import (
@@ -506,7 +507,7 @@ class PushLock:
     def register_activity_callback(
         self,
         callback: Callable[
-            [DoorActivity | LockActivity, LockInfo, ConnectionInfo], None
+            [DoorActivity | LockActivity | RawActivity, LockInfo, ConnectionInfo], None
         ],
         *,
         request_update: bool = False,

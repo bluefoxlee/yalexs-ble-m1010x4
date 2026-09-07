@@ -35,6 +35,9 @@ NO_DOOR_SENSE_MODELS = {"ASL-02", "ASL-01"}
 LOCK_ACTIVITY_POLL_RETRIES = 3
 LOCK_ACTIVITY_POLL_RETRY_EXPONENTIAL_BACKOFF_SECONDS = 15
 LOCK_ACTIVITY_POLL_INITIAL_DELAY_DURING_UPDATE = 30
+# Keep polling while the Activity integration is enabled even when the lock's
+# live state is unchanged and therefore produces no state callback.
+LOCK_ACTIVITY_POLL_INTERVAL = 60
 
 
 class Commands(IntEnum):

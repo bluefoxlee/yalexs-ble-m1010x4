@@ -9,6 +9,7 @@ from typing import Any, Protocol
 from bleak.exc import BleakError
 
 from .const import (
+    LOCK_ACTIVITY_POLL_INTERVAL,
     LOCK_ACTIVITY_POLL_RETRIES,
     LOCK_ACTIVITY_POLL_RETRY_EXPONENTIAL_BACKOFF_SECONDS,
     ConnectionInfo,
@@ -16,6 +17,7 @@ from .const import (
     LockActivity,
     LockActivityValue,
     LockInfo,
+    RawActivity,
 )
 from .lock import Lock
 from .session import DisconnectedError, ResponseError
@@ -58,7 +60,10 @@ class ActivityManager:
     ) -> None:
         self._lock = lock
         self._activity_callbacks: list[
-            Callable[[DoorActivity | LockActivity, LockInfo, ConnectionInfo], None]
+            Callable[
+                [DoorActivity | LockActivity | RawActivity, LockInfo, ConnectionInfo],
+                None,
+            ]
         ] = []
         self._activity_poll_task: asyncio.Task[None] | None = None
         self._cancel_deferred_activity_poll: asyncio.TimerHandle | None = None
@@ -66,7 +71,7 @@ class ActivityManager:
     def register_activity_callback(
         self,
         callback: Callable[
-            [DoorActivity | LockActivity, LockInfo, ConnectionInfo], None
+            [DoorActivity | LockActivity | RawActivity, LockInfo, ConnectionInfo], None
         ],
         *,
         request_update: bool = False,
@@ -217,6 +222,7 @@ class ActivityManager:
                             self._lock.name,
                             max_retries,
                         )
+                        self.schedule_activity_poll(LOCK_ACTIVITY_POLL_INTERVAL)
                     return
 
                 # Unknown records are still records. Do not mistake one for
@@ -240,6 +246,7 @@ class ActivityManager:
                         self._lock.name,
                         MAX_CONSECUTIVE_UNKNOWN_ACTIVITY_RECORDS,
                     )
+                self.schedule_activity_poll(LOCK_ACTIVITY_POLL_INTERVAL)
         except asyncio.CancelledError:
             raise
         except (BleakError, DisconnectedError, ResponseError) as err:
@@ -274,7 +281,9 @@ class ActivityManager:
                     self._lock.name,
                     max_retries,
                 )
+                self.schedule_activity_poll(LOCK_ACTIVITY_POLL_INTERVAL)
         except Exception:  # pylint: disable=broad-except
             # Do not leave an unobserved exception in the background task. Keep
             # the traceback in the log for actual programming/protocol errors.
             _LOGGER.exception("%s: Unexpected activity poll failure", self._lock.name)
+            self.schedule_activity_poll(LOCK_ACTIVITY_POLL_INTERVAL)

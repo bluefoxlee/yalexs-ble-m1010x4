@@ -7,6 +7,7 @@ import pytest
 
 from yalexs_ble.activity import ActivityManager
 from yalexs_ble.const import (
+    LOCK_ACTIVITY_POLL_INTERVAL,
     ConnectionInfo,
     DoorActivity,
     LockActivity,
@@ -62,6 +63,28 @@ async def test_activity_poll_drains_until_lock_reports_no_activity() -> None:
     await manager._execute_activity_poll(retries=0, max_retries=0, backoff=1)
 
     assert lock.lock_activity.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_activity_poll_schedules_follow_up_when_history_is_empty() -> None:
+    """Activity polling continues without a live YBA state callback."""
+    bridge = MagicMock(
+        name="front door",
+        lock_info=LockInfo("Yale", "ASL-03", "123", "1.0"),
+        connection_info=ConnectionInfo(-42),
+    )
+    bridge.operation_lock = asyncio.Lock()
+    lock = MagicMock()
+    lock.last_activity_was_unknown = False
+    lock.lock_activity = AsyncMock(return_value=None)
+    bridge.ensure_connected = AsyncMock(return_value=lock)
+    manager = ActivityManager(bridge)
+    manager.register_activity_callback(lambda *_args: None)
+    manager.schedule_activity_poll = MagicMock()
+
+    await manager._execute_activity_poll(retries=0, max_retries=0, backoff=1)
+
+    manager.schedule_activity_poll.assert_called_once_with(LOCK_ACTIVITY_POLL_INTERVAL)
 
 
 @pytest.mark.asyncio
