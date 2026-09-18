@@ -40,6 +40,7 @@ from .const import (
     LockOperationSource,
     LockStateValue,
     LockStatus,
+    M1010X4_ACTIVITY_MODEL_PREFIX,
     OperationError,
     RawActivity,
     SettingType,
@@ -49,6 +50,7 @@ from .secure_session import SecureSession
 from .session import AuthError, DisconnectedError, Session, YaleXSBLEError
 
 _LOGGER = logging.getLogger(__name__)
+_DIAG_LOGGER = logging.getLogger("yalexs_ble.diagnostics")
 
 LOCK_INFO_TIMEOUT = 3
 
@@ -792,6 +794,25 @@ class Lock:
             # Keep the record explicitly provisional: the value is an
             # observed internal credential identifier, not a confirmed Yale
             # slot number, and the remaining fields are intentionally raw.
+            model = self._lock_info.model if self._lock_info else ""
+            if model and not model.startswith(M1010X4_ACTIVITY_MODEL_PREFIX):
+                _LOGGER.warning(
+                    "%s: Ignoring activity type 0x07 for unsupported model %s "
+                    "frame=%s",
+                    self.name,
+                    model,
+                    response.hex(),
+                )
+                self._last_activity_was_unknown = True
+                return None
+            if len(response) <= 0x0E:
+                _LOGGER.warning(
+                    "%s: Ignoring truncated activity type 0x07 frame=%s",
+                    self.name,
+                    response.hex(),
+                )
+                self._last_activity_was_unknown = True
+                return None
             timestamp = self._parse_unix_timestamp(response[0x05:0x09])
             pin_id = response[0x0E]
             _LOGGER.debug(
@@ -822,16 +843,44 @@ class Lock:
         return self._last_activity_was_unknown
 
     @raise_if_not_connected
-    async def lock_activity(self) -> DoorActivity | LockActivity | None:
+    async def lock_activity(self) -> DoorActivity | LockActivity | RawActivity | None:
+        _DIAG_LOGGER.warning(
+            "%s activity request start: connected=%s session=%s",
+            self.name,
+            self.is_connected,
+            self.session is not None,
+        )
         _LOGGER.debug("%s: Executing lock_activity", self.name)
         assert self.session is not None  # nosec
-        response = await self.session.execute(
-            self.session.build_command(Commands.LOCK_ACTIVITY.value),
-            "lock_activity",
-            _poll_response_matcher(Commands.LOCK_ACTIVITY.value),
-        )
+        try:
+            response = await self.session.execute(
+                self.session.build_command(Commands.LOCK_ACTIVITY.value),
+                "lock_activity",
+                _poll_response_matcher(Commands.LOCK_ACTIVITY.value),
+            )
+        except Exception as err:
+            _DIAG_LOGGER.warning(
+                "%s activity request failed: %s: %s connected=%s",
+                self.name,
+                type(err).__name__,
+                err,
+                self.is_connected,
+            )
+            raise
         _LOGGER.debug("%s: Finished executing lock_activity", self.name)
         activity = self._parse_lock_activity(response)
+        response_type = (
+            f"0x{response[0x04]:02X}" if len(response) > 0x04 else "short"
+        )
+        _DIAG_LOGGER.warning(
+            "%s activity response: len=%d type=%s parsed=%s unknown=%s frame=%s",
+            self.name,
+            len(response),
+            response_type,
+            type(activity).__name__ if activity is not None else "none",
+            self.last_activity_was_unknown,
+            response.hex(),
+        )
         if activity is not None and self._activity_callback:
             self._activity_callback([activity])
         return activity

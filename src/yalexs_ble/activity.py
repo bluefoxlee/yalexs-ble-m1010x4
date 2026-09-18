@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable, Iterable
 from functools import partial
 from typing import Any, Protocol
@@ -23,11 +24,35 @@ from .lock import Lock
 from .session import DisconnectedError, ResponseError
 
 _LOGGER = logging.getLogger(__name__)
+_DIAG_LOGGER = logging.getLogger("yalexs_ble.diagnostics")
 
 # Some lock variants use an activity type that is not decoded yet. Allow a
 # larger bounded drain so a batch of unknown records is not truncated while
 # retaining a guard against a firmware response that repeats forever.
 MAX_CONSECUTIVE_UNKNOWN_ACTIVITY_RECORDS = 10
+
+
+def _activity_summary(activity: LockActivityValue | None) -> str:
+    """Return a safe, compact description for temporary diagnostics."""
+    if activity is None:
+        return "none"
+    if isinstance(activity, RawActivity):
+        return (
+            f"RawActivity type=0x{activity.activity_type:02X} "
+            f"pin_id={activity.pin_id!r} timestamp={activity.timestamp.isoformat()}"
+        )
+    if isinstance(activity, DoorActivity):
+        return (
+            f"DoorActivity status={activity.status.name} "
+            f"timestamp={activity.timestamp.isoformat()}"
+        )
+    if isinstance(activity, LockActivity):
+        return (
+            f"LockActivity status={activity.status.name} "
+            f"source={activity.source.name} slot={activity.slot!r} "
+            f"timestamp={activity.timestamp.isoformat()}"
+        )
+    return type(activity).__name__
 
 
 class LockBridge(Protocol):
@@ -67,6 +92,7 @@ class ActivityManager:
         ] = []
         self._activity_poll_task: asyncio.Task[None] | None = None
         self._cancel_deferred_activity_poll: asyncio.TimerHandle | None = None
+        self._poll_sequence = 0
 
     def register_activity_callback(
         self,
@@ -80,7 +106,9 @@ class ActivityManager:
         self._activity_callbacks.append(callback)
 
         if request_update:
-            self.schedule_activity_poll(0, max_retries=0)
+            self.schedule_activity_poll(
+                0, max_retries=0, reason="initial_request"
+            )
 
         return partial(self._activity_callbacks.remove, callback)
 
@@ -89,6 +117,12 @@ class ActivityManager:
         _LOGGER.debug("%s: Activity updates: %s", self._lock.name, activities)
 
         for activity in activities:
+            _DIAG_LOGGER.warning(
+                "%s activity callback dispatch: %s callbacks=%d",
+                self._lock.name,
+                _activity_summary(activity),
+                len(self._activity_callbacks),
+            )
             self._callback_activity(activity)
 
     async def execute_forced_disconnect(self) -> None:
@@ -98,6 +132,9 @@ class ActivityManager:
         ) and not activity_poll_task.done():
             self._activity_poll_task = None
             activity_poll_task.cancel()
+            _DIAG_LOGGER.warning(
+                "%s activity poll cancelled for forced disconnect", self._lock.name
+            )
             await activity_poll_task
 
     def _callback_activity(self, activity: LockActivityValue) -> None:
@@ -136,6 +173,7 @@ class ActivityManager:
         backoff: float = LOCK_ACTIVITY_POLL_RETRY_EXPONENTIAL_BACKOFF_SECONDS,
         *,
         replace: bool = True,
+        reason: str = "unspecified",
     ) -> None:
         """Schedule an activity poll in future seconds.
 
@@ -144,6 +182,20 @@ class ActivityManager:
         """
         if not self._activity_callbacks:
             return
+
+        _DIAG_LOGGER.warning(
+            "%s activity poll scheduled: delay=%.1fs retry=%d/%d replace=%s "
+            "reason=%s pending=%s running=%s",
+            self._lock.name,
+            seconds,
+            retries,
+            max_retries,
+            replace,
+            reason,
+            self._cancel_deferred_activity_poll is not None,
+            self._activity_poll_task is not None
+            and not self._activity_poll_task.done(),
+        )
 
         if not replace and (
             self._cancel_deferred_activity_poll
@@ -185,6 +237,10 @@ class ActivityManager:
                 "%s: Skipping activity poll since one already in progress",
                 self._lock.name,
             )
+            _DIAG_LOGGER.warning(
+                "%s activity poll skipped: another poll is already running",
+                self._lock.name,
+            )
             return
         self._activity_poll_task = asyncio.create_task(
             self._execute_activity_poll(
@@ -200,17 +256,59 @@ class ActivityManager:
         if not self._activity_callbacks:
             return
 
+        self._poll_sequence += 1
+        poll_id = self._poll_sequence
+        started = time.monotonic()
         _LOGGER.debug("%s: Starting deferred activity update", self._lock.name)
+        _DIAG_LOGGER.warning(
+            "%s activity poll[%d] start: retry=%d/%d",
+            self._lock.name,
+            poll_id,
+            retries,
+            max_retries,
+        )
 
         try:
             # Activity polling shares the PushLock connection with the normal
             # YBA state/update path. Serialize the history command with lock
             # operations and state reads so the ESPHome proxy never receives
             # two GATT writes on the same Yale session at once.
+            lock_wait_started = time.monotonic()
+            _DIAG_LOGGER.warning(
+                "%s activity poll[%d] waiting for operation lock",
+                self._lock.name,
+                poll_id,
+            )
             async with self._lock.operation_lock:
+                _DIAG_LOGGER.warning(
+                    "%s activity poll[%d] operation lock acquired after %.3fs",
+                    self._lock.name,
+                    poll_id,
+                    time.monotonic() - lock_wait_started,
+                )
+                _DIAG_LOGGER.warning(
+                    "%s activity poll[%d] ensure_connected start",
+                    self._lock.name,
+                    poll_id,
+                )
                 lock = await self._lock.ensure_connected()
+                _DIAG_LOGGER.warning(
+                    "%s activity poll[%d] ensure_connected done: connected=%s",
+                    self._lock.name,
+                    poll_id,
+                    lock.is_connected,
+                )
+                request_number = 1
                 first_result = await lock.lock_activity()
                 first_was_unknown = lock.last_activity_was_unknown
+                _DIAG_LOGGER.warning(
+                    "%s activity poll[%d] request[%d] result=%s unknown=%s",
+                    self._lock.name,
+                    poll_id,
+                    request_number,
+                    _activity_summary(first_result),
+                    first_was_unknown,
+                )
 
                 if not first_result and not first_was_unknown:
                     if retries < max_retries:
@@ -226,6 +324,7 @@ class ActivityManager:
                             retries=retries + 1,
                             max_retries=max_retries,
                             backoff=backoff,
+                            reason="empty_response_retry",
                         )
                     else:
                         _LOGGER.debug(
@@ -234,7 +333,10 @@ class ActivityManager:
                             self._lock.name,
                             max_retries,
                         )
-                        self.schedule_activity_poll(LOCK_ACTIVITY_POLL_INTERVAL)
+                        self.schedule_activity_poll(
+                            LOCK_ACTIVITY_POLL_INTERVAL,
+                            reason="empty_response_interval",
+                        )
                     return
 
                 # Unknown records are still records. Do not mistake one for
@@ -243,9 +345,27 @@ class ActivityManager:
                 # repeats the same unknown response forever.
                 unknown_records = int(first_was_unknown)
                 while unknown_records < MAX_CONSECUTIVE_UNKNOWN_ACTIVITY_RECORDS:
+                    request_number += 1
                     result = await lock.lock_activity()
+                    _DIAG_LOGGER.warning(
+                        "%s activity poll[%d] request[%d] result=%s unknown=%s "
+                        "unknown_streak=%d",
+                        self._lock.name,
+                        poll_id,
+                        request_number,
+                        _activity_summary(result),
+                        lock.last_activity_was_unknown,
+                        unknown_records,
+                    )
                     if result is None:
                         if not lock.last_activity_was_unknown:
+                            _DIAG_LOGGER.warning(
+                                "%s activity poll[%d] history end marker after "
+                                "%d request(s)",
+                                self._lock.name,
+                                poll_id,
+                                request_number,
+                            )
                             break
                         unknown_records += 1
                         continue
@@ -258,8 +378,24 @@ class ActivityManager:
                         self._lock.name,
                         MAX_CONSECUTIVE_UNKNOWN_ACTIVITY_RECORDS,
                     )
-                self.schedule_activity_poll(LOCK_ACTIVITY_POLL_INTERVAL)
+                self.schedule_activity_poll(
+                    LOCK_ACTIVITY_POLL_INTERVAL,
+                    reason="poll_complete_interval",
+                )
+                _DIAG_LOGGER.warning(
+                    "%s activity poll[%d] complete duration=%.3fs requests=%d",
+                    self._lock.name,
+                    poll_id,
+                    time.monotonic() - started,
+                    request_number,
+                )
         except asyncio.CancelledError:
+            _DIAG_LOGGER.warning(
+                "%s activity poll[%d] cancelled after %.3fs",
+                self._lock.name,
+                poll_id,
+                time.monotonic() - started,
+            )
             raise
         except (BleakError, DisconnectedError, ResponseError) as err:
             # Activity polling used to be the one path that bypassed the
@@ -269,6 +405,14 @@ class ActivityManager:
             _LOGGER.warning(
                 "%s: Activity poll lost the Bluetooth connection: %s",
                 self._lock.name,
+                err,
+            )
+            _DIAG_LOGGER.warning(
+                "%s activity poll[%d] failed after %.3fs: %s: %s",
+                self._lock.name,
+                poll_id,
+                time.monotonic() - started,
+                type(err).__name__,
                 err,
             )
             try:
@@ -286,6 +430,7 @@ class ActivityManager:
                     retries=retries + 1,
                     max_retries=max_retries,
                     backoff=backoff,
+                    reason="connection_error_retry",
                 )
             else:
                 _LOGGER.warning(
@@ -293,9 +438,22 @@ class ActivityManager:
                     self._lock.name,
                     max_retries,
                 )
-                self.schedule_activity_poll(LOCK_ACTIVITY_POLL_INTERVAL)
+                self.schedule_activity_poll(
+                    LOCK_ACTIVITY_POLL_INTERVAL,
+                    reason="connection_error_interval",
+                )
         except Exception:  # pylint: disable=broad-except
             # Do not leave an unobserved exception in the background task. Keep
             # the traceback in the log for actual programming/protocol errors.
             _LOGGER.exception("%s: Unexpected activity poll failure", self._lock.name)
-            self.schedule_activity_poll(LOCK_ACTIVITY_POLL_INTERVAL)
+            _DIAG_LOGGER.warning(
+                "%s activity poll[%d] unexpected failure after %.3fs",
+                self._lock.name,
+                poll_id,
+                time.monotonic() - started,
+                exc_info=True,
+            )
+            self.schedule_activity_poll(
+                LOCK_ACTIVITY_POLL_INTERVAL,
+                reason="unexpected_error_interval",
+            )

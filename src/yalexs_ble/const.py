@@ -30,11 +30,20 @@ FIRMWARE_REVISION_CHARACTERISTIC = "00002a26-0000-1000-8000-00805f9b34fb"
 
 NO_DOOR_SENSE_MODELS = {"ASL-02", "ASL-01"}
 
+# Activity type 0x07 and its byte layout were verified against the
+# M1010X4 keypad/module variant. Other models may use the same activity byte
+# for a different record shape, so the provisional parser must not claim
+# those records once the model is known.
+M1010X4_ACTIVITY_MODEL_PREFIX = "M1010X4"
+
 
 # delay on last attempt will be 60 sec: backoff_seconds * (retries-1)^2
 LOCK_ACTIVITY_POLL_RETRIES = 3
 LOCK_ACTIVITY_POLL_RETRY_EXPONENTIAL_BACKOFF_SECONDS = 15
-LOCK_ACTIVITY_POLL_INITIAL_DELAY_DURING_UPDATE = 30
+# Poll shortly after a live state update so delayed keypad/PIN records are
+# still present when the history command runs. Later empty polls use the
+# existing 15/30/60-second retry backoff.
+LOCK_ACTIVITY_POLL_INITIAL_DELAY_DURING_UPDATE = 5
 # Keep polling while the Activity integration is enabled even when the lock's
 # live state is unchanged and therefore produces no state callback.
 LOCK_ACTIVITY_POLL_INTERVAL = 60

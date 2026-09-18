@@ -20,6 +20,7 @@ from . import util
 from .const import READ_CHARACTERISTIC, RESPONSE_FRAME_LEN, WRITE_CHARACTERISTIC
 
 _LOGGER = logging.getLogger(__name__)
+_DIAG_LOGGER = logging.getLogger("yalexs_ble.diagnostics")
 
 COOLDOWN_TIME = 0.25
 
@@ -75,6 +76,7 @@ class Session:
         self._notifications_started = False
         self._notify_future: asyncio.Future[bytes] | None = None
         self._notify_matcher: Callable[[bytes], bool] | None = None
+        self._notify_command_name: str | None = None
         self._state_callback = state_callback
         self._disconnected_futures = disconnected_futures
         self._first_request = True
@@ -158,6 +160,7 @@ class Session:
         future = self._notify_future
         self._notify_future = None
         self._notify_matcher = None
+        self._notify_command_name = None
         return future
 
     def _reject_frame(
@@ -191,6 +194,10 @@ class Session:
             bool(self._notify_future),
         )
         if not data:
+            if self._notify_command_name == "lock_activity":
+                _DIAG_LOGGER.warning(
+                    "%s activity notify: empty payload", self.name
+                )
             # An empty notification is a transport artifact, not a frame off
             # the lock: the stack emits them on its own, so one carries no
             # signal about the link or the command in flight, and it was a
@@ -201,6 +208,13 @@ class Session:
             _LOGGER.debug("%s: Dropping empty notification", self.name)
             return
         if len(data) != RESPONSE_FRAME_LEN:
+            if self._notify_command_name == "lock_activity":
+                _DIAG_LOGGER.warning(
+                    "%s activity notify: invalid length=%d payload=%s",
+                    self.name,
+                    len(data),
+                    data.hex(),
+                )
             # Strict equality, and it must sit ahead of decrypt: the cipher
             # context consumes ciphertext in 16-byte blocks, so a partial
             # block fed to it stays buffered inside and desynchronizes every
@@ -225,6 +239,18 @@ class Session:
             )
             return
         decrypted_data = self.decrypt(data)
+        if self._notify_command_name == "lock_activity":
+            _DIAG_LOGGER.warning(
+                "%s activity notify: decrypted len=%d type=%s frame=%s",
+                self.name,
+                len(decrypted_data),
+                (
+                    f"0x{decrypted_data[0x04]:02X}"
+                    if len(decrypted_data) > 0x04
+                    else "short"
+                ),
+                decrypted_data.hex(),
+            )
         _LOGGER.debug(
             "%s: Decrypted response via notify: %s", self.name, decrypted_data.hex()
         )
@@ -283,6 +309,13 @@ class Session:
                 future = self.loop.create_future()
                 self._notify_future = future
                 self._notify_matcher = response_matcher
+                self._notify_command_name = command_name
+                if command_name == "lock_activity":
+                    _DIAG_LOGGER.warning(
+                        "%s activity GATT write attempt=%d",
+                        self.name,
+                        attempt + 1,
+                    )
                 _LOGGER.debug(
                     "%s: Writing command to %s: %s",
                     self.name,

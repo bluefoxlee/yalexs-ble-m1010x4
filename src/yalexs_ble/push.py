@@ -55,6 +55,7 @@ from .session import (
 from .util import asyncio_timeout, is_disconnected_error, local_name_is_unique
 
 _LOGGER = logging.getLogger(__name__)
+_DIAG_LOGGER = logging.getLogger("yalexs_ble.diagnostics")
 
 # Advertisement debugger (this one is quite noisy so it has its only logger)
 _ADV_LOGGER = logging.getLogger("yalexs_ble_adv")
@@ -1279,7 +1280,12 @@ class PushLock:
 
         self._activity_manager.schedule_activity_poll(
             LOCK_ACTIVITY_POLL_INITIAL_DELAY_DURING_UPDATE,
-            replace=False,
+            # A state update is a high-priority hint that the lock may have
+            # created a new history record. Replace a pending empty-history
+            # retry so this read happens promptly instead of waiting for the
+            # retry backoff (which can be 30 or 60 seconds).
+            replace=True,
+            reason="full_state_update",
         )
 
         if not has_lock_info:
@@ -1332,10 +1338,13 @@ class PushLock:
         # Some state changes arrive through the live notification path rather
         # than at the end of a complete _update() cycle. Schedule the history
         # poll here too so Activity does not depend on which YBA path delivered
-        # the state change.
+        # the state change. State changes take priority over a pending retry:
+        # the retry may have been scheduled after an empty 0x80 response and
+        # is no longer the best time to read newly-created history.
         self._activity_manager.schedule_activity_poll(
             LOCK_ACTIVITY_POLL_INITIAL_DELAY_DURING_UPDATE,
-            replace=False,
+            replace=True,
+            reason="live_state_callback",
         )
         if not self._callbacks:
             return

@@ -296,7 +296,14 @@ async def test_lock_activity_unknown_frame_logs_once(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A solicited 0x07 historical frame is emitted as a raw activity once."""
-    lock = _make_lock()
+    lock = _make_lock(
+        info=LockInfo(
+            manufacturer="Yale/August",
+            model="M1010X4",
+            serial="serial",
+            firmware="2.2.5",
+        )
+    )
     frame = bytes.fromhex("bb2d000007000102030405060708090a0b0c")
     lock.client = MagicMock(is_connected=True)
     lock.session = MagicMock()
@@ -323,6 +330,44 @@ async def test_lock_activity_unknown_frame_logs_once(
     assert len(received) == 1
     assert len(received[0]) == 1
     assert "Unknown activity type: 0x07" not in caplog.text
+
+
+def test_parse_m1010x4_activity_type_07_is_model_guarded(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Do not apply the provisional M1010X4 layout to another model."""
+    lock = _make_lock(
+        info=LockInfo(
+            manufacturer="Yale/August",
+            model="ASL-03",
+            serial="serial",
+            firmware="2.2.5",
+        )
+    )
+    frame = bytes.fromhex("bb2d000007000102030405060708090a0b0c")
+
+    with caplog.at_level("WARNING", logger="yalexs_ble.lock"):
+        result = lock._parse_lock_activity(frame)
+
+    assert result is None
+    assert lock.last_activity_was_unknown
+    assert "unsupported model ASL-03" in caplog.text
+
+
+def test_parse_m1010x4_activity_type_07_rejects_truncated_frame() -> None:
+    """A malformed 0x07 response must not raise while reading byte 0x0E."""
+    lock = _make_lock(
+        info=LockInfo(
+            manufacturer="Yale/August",
+            model="M1010X4",
+            serial="serial",
+            firmware="2.2.5",
+        )
+    )
+    frame = bytes.fromhex("bb2d00000700010203040506070809")
+
+    assert lock._parse_lock_activity(frame) is None
+    assert lock.last_activity_was_unknown
 
 
 def test_parse_unknown_lock_activity_logs_raw_frame(
@@ -436,6 +481,7 @@ def test_jammed_maps_to_the_settled_static_position_value() -> None:
 def _make_lock(
     state_callback: Callable[[Iterable[LockStateValue]], None] = lambda _: None,
     activity_callback: Callable[[Iterable[LockActivityValue]], None] | None = None,
+    info: LockInfo | None = None,
 ) -> Lock:
     return Lock(
         lambda: BLEDevice("aa:bb:cc:dd:ee:ff", "lock"),
@@ -443,6 +489,7 @@ def _make_lock(
         1,
         "mylock",
         state_callback,
+        info=info,
         activity_callback=activity_callback,
     )
 

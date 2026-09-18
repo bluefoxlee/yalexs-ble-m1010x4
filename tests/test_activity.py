@@ -84,7 +84,10 @@ async def test_activity_poll_schedules_follow_up_when_history_is_empty() -> None
 
     await manager._execute_activity_poll(retries=0, max_retries=0, backoff=1)
 
-    manager.schedule_activity_poll.assert_called_once_with(LOCK_ACTIVITY_POLL_INTERVAL)
+    manager.schedule_activity_poll.assert_called_once_with(
+        LOCK_ACTIVITY_POLL_INTERVAL,
+        reason="empty_response_interval",
+    )
 
 
 def test_activity_poll_does_not_replace_existing_poll_when_not_requested() -> None:
@@ -122,7 +125,11 @@ async def test_activity_poll_recovers_from_disconnected_error() -> None:
 
     bridge.handle_disconnected.assert_awaited_once()
     manager.schedule_activity_poll.assert_called_once_with(
-        1, retries=1, max_retries=1, backoff=1
+        1,
+        retries=1,
+        max_retries=1,
+        backoff=1,
+        reason="connection_error_retry",
     )
 
 
