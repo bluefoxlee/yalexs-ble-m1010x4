@@ -844,7 +844,7 @@ class Lock:
 
     @raise_if_not_connected
     async def lock_activity(self) -> DoorActivity | LockActivity | RawActivity | None:
-        _DIAG_LOGGER.warning(
+        _DIAG_LOGGER.debug(
             "%s activity request start: connected=%s session=%s",
             self.name,
             self.is_connected,
@@ -872,7 +872,7 @@ class Lock:
         response_type = (
             f"0x{response[0x04]:02X}" if len(response) > 0x04 else "short"
         )
-        _DIAG_LOGGER.warning(
+        _DIAG_LOGGER.debug(
             "%s activity response: len=%d type=%s parsed=%s unknown=%s frame=%s",
             self.name,
             len(response),

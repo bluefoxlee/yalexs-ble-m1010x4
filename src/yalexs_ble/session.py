@@ -195,7 +195,7 @@ class Session:
         )
         if not data:
             if self._notify_command_name == "lock_activity":
-                _DIAG_LOGGER.warning(
+                _DIAG_LOGGER.debug(
                     "%s activity notify: empty payload", self.name
                 )
             # An empty notification is a transport artifact, not a frame off
@@ -240,7 +240,7 @@ class Session:
             return
         decrypted_data = self.decrypt(data)
         if self._notify_command_name == "lock_activity":
-            _DIAG_LOGGER.warning(
+            _DIAG_LOGGER.debug(
                 "%s activity notify: decrypted len=%d type=%s frame=%s",
                 self.name,
                 len(decrypted_data),
@@ -311,7 +311,7 @@ class Session:
                 self._notify_matcher = response_matcher
                 self._notify_command_name = command_name
                 if command_name == "lock_activity":
-                    _DIAG_LOGGER.warning(
+                    _DIAG_LOGGER.debug(
                         "%s activity GATT write attempt=%d",
                         self.name,
                         attempt + 1,

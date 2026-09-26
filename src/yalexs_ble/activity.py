@@ -117,7 +117,7 @@ class ActivityManager:
         _LOGGER.debug("%s: Activity updates: %s", self._lock.name, activities)
 
         for activity in activities:
-            _DIAG_LOGGER.warning(
+            _DIAG_LOGGER.debug(
                 "%s activity callback dispatch: %s callbacks=%d",
                 self._lock.name,
                 _activity_summary(activity),
@@ -132,7 +132,7 @@ class ActivityManager:
         ) and not activity_poll_task.done():
             self._activity_poll_task = None
             activity_poll_task.cancel()
-            _DIAG_LOGGER.warning(
+            _DIAG_LOGGER.debug(
                 "%s activity poll cancelled for forced disconnect", self._lock.name
             )
             await activity_poll_task
@@ -183,7 +183,7 @@ class ActivityManager:
         if not self._activity_callbacks:
             return
 
-        _DIAG_LOGGER.warning(
+        _DIAG_LOGGER.debug(
             "%s activity poll scheduled: delay=%.1fs retry=%d/%d replace=%s "
             "reason=%s pending=%s running=%s",
             self._lock.name,
@@ -237,7 +237,7 @@ class ActivityManager:
                 "%s: Skipping activity poll since one already in progress",
                 self._lock.name,
             )
-            _DIAG_LOGGER.warning(
+            _DIAG_LOGGER.debug(
                 "%s activity poll skipped: another poll is already running",
                 self._lock.name,
             )
@@ -260,7 +260,7 @@ class ActivityManager:
         poll_id = self._poll_sequence
         started = time.monotonic()
         _LOGGER.debug("%s: Starting deferred activity update", self._lock.name)
-        _DIAG_LOGGER.warning(
+        _DIAG_LOGGER.debug(
             "%s activity poll[%d] start: retry=%d/%d",
             self._lock.name,
             poll_id,
@@ -274,25 +274,25 @@ class ActivityManager:
             # operations and state reads so the ESPHome proxy never receives
             # two GATT writes on the same Yale session at once.
             lock_wait_started = time.monotonic()
-            _DIAG_LOGGER.warning(
+            _DIAG_LOGGER.debug(
                 "%s activity poll[%d] waiting for operation lock",
                 self._lock.name,
                 poll_id,
             )
             async with self._lock.operation_lock:
-                _DIAG_LOGGER.warning(
+                _DIAG_LOGGER.debug(
                     "%s activity poll[%d] operation lock acquired after %.3fs",
                     self._lock.name,
                     poll_id,
                     time.monotonic() - lock_wait_started,
                 )
-                _DIAG_LOGGER.warning(
+                _DIAG_LOGGER.debug(
                     "%s activity poll[%d] ensure_connected start",
                     self._lock.name,
                     poll_id,
                 )
                 lock = await self._lock.ensure_connected()
-                _DIAG_LOGGER.warning(
+                _DIAG_LOGGER.debug(
                     "%s activity poll[%d] ensure_connected done: connected=%s",
                     self._lock.name,
                     poll_id,
@@ -301,7 +301,7 @@ class ActivityManager:
                 request_number = 1
                 first_result = await lock.lock_activity()
                 first_was_unknown = lock.last_activity_was_unknown
-                _DIAG_LOGGER.warning(
+                _DIAG_LOGGER.debug(
                     "%s activity poll[%d] request[%d] result=%s unknown=%s",
                     self._lock.name,
                     poll_id,
@@ -347,7 +347,7 @@ class ActivityManager:
                 while unknown_records < MAX_CONSECUTIVE_UNKNOWN_ACTIVITY_RECORDS:
                     request_number += 1
                     result = await lock.lock_activity()
-                    _DIAG_LOGGER.warning(
+                    _DIAG_LOGGER.debug(
                         "%s activity poll[%d] request[%d] result=%s unknown=%s "
                         "unknown_streak=%d",
                         self._lock.name,
@@ -359,7 +359,7 @@ class ActivityManager:
                     )
                     if result is None:
                         if not lock.last_activity_was_unknown:
-                            _DIAG_LOGGER.warning(
+                            _DIAG_LOGGER.debug(
                                 "%s activity poll[%d] history end marker after "
                                 "%d request(s)",
                                 self._lock.name,
@@ -382,7 +382,7 @@ class ActivityManager:
                     LOCK_ACTIVITY_POLL_INTERVAL,
                     reason="poll_complete_interval",
                 )
-                _DIAG_LOGGER.warning(
+                _DIAG_LOGGER.debug(
                     "%s activity poll[%d] complete duration=%.3fs requests=%d",
                     self._lock.name,
                     poll_id,
@@ -390,7 +390,7 @@ class ActivityManager:
                     request_number,
                 )
         except asyncio.CancelledError:
-            _DIAG_LOGGER.warning(
+            _DIAG_LOGGER.debug(
                 "%s activity poll[%d] cancelled after %.3fs",
                 self._lock.name,
                 poll_id,
