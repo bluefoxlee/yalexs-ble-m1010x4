@@ -29,6 +29,22 @@
 
 Bluetooth control of Yale and August locks
 
+## M1010X4 patch branch
+
+The `yalexs-ble-4.0.1-patches` branch is an independent compatibility fork
+used by the companion [Yale Access Bluetooth Activity](https://github.com/bluefoxlee/yalexs-ble-activity-m1010x4)
+integration. It retains the upstream BLE control behavior and adds provisional
+activity parsing for an observed M1010X4 keypad/module variant:
+
+- activity type `0x07` is parsed as a raw keypad/PIN activity;
+- the timestamp uses bytes `0x05`–`0x08`;
+- the lock-specific credential identifier is exposed from byte `0x0E`.
+
+The identifier is not a confirmed Yale slot number and is not the PIN value.
+The frame layout has only been verified on the M1010X4 variant; other
+Yale/August models may use different activity formats. This fork is not
+affiliated with Yale, Yale Home, August, or Home Assistant.
+
 ## Installation
 
 Install this via pip (or your favourite package manager):

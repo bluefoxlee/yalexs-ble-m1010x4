@@ -30,13 +30,6 @@ FIRMWARE_REVISION_CHARACTERISTIC = "00002a26-0000-1000-8000-00805f9b34fb"
 
 NO_DOOR_SENSE_MODELS = {"ASL-02", "ASL-01"}
 
-# Activity type 0x07 and its byte layout were verified against the
-# M1010X4 keypad/module variant. Other models may use the same activity byte
-# for a different record shape, so the provisional parser must not claim
-# those records once the model is known.
-M1010X4_ACTIVITY_MODEL_PREFIX = "M1010X4"
-
-
 # delay on last attempt will be 60 sec: backoff_seconds * (retries-1)^2
 LOCK_ACTIVITY_POLL_RETRIES = 3
 LOCK_ACTIVITY_POLL_RETRY_EXPONENTIAL_BACKOFF_SECONDS = 15

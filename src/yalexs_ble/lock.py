@@ -40,7 +40,6 @@ from .const import (
     LockOperationSource,
     LockStateValue,
     LockStatus,
-    M1010X4_ACTIVITY_MODEL_PREFIX,
     OperationError,
     RawActivity,
     SettingType,
@@ -794,25 +793,6 @@ class Lock:
             # Keep the record explicitly provisional: the value is an
             # observed internal credential identifier, not a confirmed Yale
             # slot number, and the remaining fields are intentionally raw.
-            model = self._lock_info.model if self._lock_info else ""
-            if model and not model.startswith(M1010X4_ACTIVITY_MODEL_PREFIX):
-                _LOGGER.warning(
-                    "%s: Ignoring activity type 0x07 for unsupported model %s "
-                    "frame=%s",
-                    self.name,
-                    model,
-                    response.hex(),
-                )
-                self._last_activity_was_unknown = True
-                return None
-            if len(response) <= 0x0E:
-                _LOGGER.warning(
-                    "%s: Ignoring truncated activity type 0x07 frame=%s",
-                    self.name,
-                    response.hex(),
-                )
-                self._last_activity_was_unknown = True
-                return None
             timestamp = self._parse_unix_timestamp(response[0x05:0x09])
             pin_id = response[0x0E]
             _LOGGER.debug(
